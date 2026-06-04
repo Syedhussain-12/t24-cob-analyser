@@ -1,3 +1,4 @@
+<<<<<<< HEAD
 # T24 COB Performance Analyser
 ### by Vexora AI
 
@@ -40,3 +41,6 @@ Then run with `vercel dev` instead of `npm start`.
 
 ## Deployment (Vercel)
 See DEPLOYMENT.md for full step-by-step instructions.
+=======
+# t24-cob-analyser
+>>>>>>> 2cb08179a20b7e794231e868c2615fdbe6281d26

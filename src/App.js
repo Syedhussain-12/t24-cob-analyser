@@ -228,11 +228,27 @@ export default function T24COBAnalyser() {
     if (!chatInput.trim()) return;
     const history = [...chatMessages, { role: "user", content: chatInput }];
     setChatMessages(history); setChatInput(""); setChatLoading(true);
+
+    // Inject current analysis into system prompt so chat is fully synced
+    const analysisContext = analysis ? [
+      "CURRENT SESSION ANALYSIS:",
+      `Summary: ${analysis.summary}`,
+      `Risk: ${analysis.duration_risk} | Score: ${computeScore(analysis)}/100`,
+      "Issues:",
+      ...(analysis.issues || []).map(i => `  [${i.severity}] ${i.title} — Fix: ${i.fix}`),
+      "Optimizations:",
+      ...(analysis.optimizations || []).map(o => `  ${o.title}: ${o.action} (${o.expected_gain})`),
+      `Priority Actions: ${(analysis.priority_actions || []).join(", ")}`,
+      `Phases: ${(analysis.cob_phases || []).map(p => `${p.phase}=${p.status}`).join(", ")}`,
+      "",
+      "Answer questions referencing THIS specific analysis. Be direct and specific.",
+    ].join("\n") : "No analysis run yet. Answer general T24 COB questions.";
+
     try {
       const data = await callAPI({
         model: "claude-haiku-4-5-20251001",
         max_tokens: 1000,
-        system: "You are a T24 COB performance expert. Answer concisely with specific T24 field names and fixes.",
+        system: `You are a T24 COB performance expert inside the T24 COB Analyser tool. Use specific T24 field names and fixes.\n\n${analysisContext}`,
         messages: history,
       });
       const text = data.content?.map(b => b.text || "").join("") || "Error — try again.";
