@@ -11,14 +11,17 @@ const THEME = {
 const SYSTEM_PROMPT = `You are a senior Temenos T24 Core Banking performance engineer. Analyze the provided log files and return ONLY a valid JSON object — no markdown, no backticks, no text before or after.
 
 Rules:
-- Identify ALL real issues found in the logs — do not limit to 2
-- Each issue must reference actual log entries, error codes, or timestamps found
-- Severity must reflect actual impact: CRITICAL=system failure/data loss risk, HIGH=major perf impact, MEDIUM=degraded perf, LOW=minor
-- duration_risk is overall COB health: CRITICAL/HIGH/MEDIUM/LOW based on actual findings
+- Be HONEST about log quality. If the logs show a healthy COB with no real problems, return duration_risk=LOW with 0-2 minor issues
+- If the logs are clean, set issues=[] (empty array is valid) and clearly state "No significant issues detected" in summary
+- Do NOT invent issues. Do NOT inflate severity. A healthy COB should score 85-100
+- Severity guide: CRITICAL=actual system failure/data loss, HIGH=clear performance bottleneck with measurable impact, MEDIUM=visible degradation, LOW=minor observation
+- duration_risk reflects ACTUAL findings: LOW=healthy, MEDIUM=some concerns, HIGH=clear problems, CRITICAL=immediate action needed
+- Each issue MUST reference actual log entries, error codes, or timestamps you can see in the provided logs
 - Fixes must be specific T24 actions with field names, commands, or config changes
-- If KB documents are provided, use them to give more accurate and specific fixes
+- If KB documents are provided, use them to give more accurate, documentation-backed fixes
 - Strings can be up to 120 characters
-- Return between 2-6 issues, 2-4 optimizations, 2-4 cob_phases, 3-5 priority_actions based on what is actually found
+- Issue count varies by what you actually find: 0 if clean, up to 6 if multiple real problems
+- Mark phases OK if they completed normally — do not mark everything CRITICAL by default
 
 JSON format:
 {
@@ -74,10 +77,23 @@ function safeParseJSON(text) {
 
 function computeScore(analysis) {
   if (!analysis) return 0;
-  const riskMap = { LOW: 90, MEDIUM: 65, HIGH: 35, CRITICAL: 10 };
-  let score = riskMap[analysis.duration_risk] || 50;
-  (analysis.issues || []).forEach(i => { score -= { CRITICAL: 12, HIGH: 8, MEDIUM: 4, LOW: 1 }[i.severity] || 0; });
-  return Math.max(0, Math.min(100, Math.round(score)));
+  // Base score from risk level — higher floor so score is not always 0
+  const riskMap = { LOW: 92, MEDIUM: 75, HIGH: 55, CRITICAL: 30 };
+  let score = riskMap[analysis.duration_risk] || 65;
+  // Smaller deductions per issue — cap total deduction
+  const issues = analysis.issues || [];
+  let deduction = 0;
+  issues.forEach(i => {
+    deduction += { CRITICAL: 8, HIGH: 5, MEDIUM: 2, LOW: 0.5 }[i.severity] || 0;
+  });
+  // Cap total deduction at 35 so risk level remains the dominant factor
+  deduction = Math.min(35, deduction);
+  score -= deduction;
+  // Bonus for healthy phases
+  const phases = analysis.cob_phases || [];
+  const okPhases = phases.filter(p => p.status === "OK").length;
+  if (phases.length > 0) score += okPhases * 2;
+  return Math.max(5, Math.min(100, Math.round(score)));
 }
 
 function Gauge({ score }) {
