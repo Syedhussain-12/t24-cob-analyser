@@ -8,39 +8,7 @@ const THEME = {
   textPrimary: "#e8edf3", textSecondary: "#7a8fa8", textMuted: "#4a5a6a",
 };
 
-const QUICK_LOGS = {
-  "COB Timeout": `[22:14:33] COB.START
-[22:14:35] TSA.SERVICES agents: 48 started
-[22:15:01] AA.EOD.PROCESS starting
-[22:18:44] WARNING: F.ACCOUNT full table scan 2.3M records
-[22:19:02] IC.COB batch started
-[22:24:55] ERROR: IC.COB timeout 356s retrying
-[22:25:01] OFS.SOURCE verbose logging ON
-[22:31:17] RE.BUILD.SLC.WORK 890234 records
-[22:45:00] WARNING: COB exceeded 30min threshold
-[23:02:18] AA.SOD.PROCESS 12443 reverse-replay activities
-[23:14:55] EOD.RE.PROFIT.LOSS started
-[00:22:10] COB.END duration 128 minutes`,
-  "Index Issues": `[23:00:00] COB START
-[23:00:05] STANDARD.SELECTION EB.CUSTOMER.STATUS no index
-[23:00:08] F.CUSTOMER full table scan 4.1M rows
-[23:00:45] WARNING: missing index ACCOUNT.OFFICER field
-[23:01:33] F.ACCT.ENTLMT outdated STANDARD.SELECTION
-[23:03:12] IC.COB query optimizer fallback
-[23:08:00] F.ACCOUNT SECTOR scan 2.8M rows no index
-[23:22:45] EB.EOD.REPORT.PRINT long query 840s
-[00:45:00] COB END duration 105 minutes`,
-  "AA Data Quality": `[22:00:00] AA.EOD.PROCESS start
-[22:00:12] WARNING: 3241 unauthorized AA records pre-COB
-[22:05:44] PENDING.CLOSURE count 18922
-[22:06:01] ERROR: expired arrangements not moved to PENDING.CLOSURE
-[22:12:33] AA.SOD.PROCESS high reverse-replay load
-[22:15:00] Product tracker NOT executed post publish
-[22:18:44] AA.EOD.PROCESS stalled data quality failed
-[22:45:00] WARNING: 924 PENDING.CLOSE still active
-[23:30:00] AA.EOD.PROCESS retry 3 of 5
-[01:15:00] COB END AA issues caused 75min delay`,
-};
+const LOG_TYPES = ["WAS", "EDB.log", "MDB.log", "JMS", "IBM MQ", "DATABASE.log", "Runtime.log", "COB", "Other"];
 
 const SYSTEM_PROMPT = `T24 COB expert. Output ONLY a raw JSON object. No markdown, no backticks, no prose before or after. Keep every string under 55 characters. Return exactly 2 issues, 2 optimizations, 2 cob_phases, 2 priority_actions.
 
@@ -49,8 +17,7 @@ Format:
 
 function safeParseJSON(text) {
   try { return JSON.parse(text); } catch {}
-  const s = text.indexOf("{");
-  const e = text.lastIndexOf("}");
+  const s = text.indexOf("{"); const e = text.lastIndexOf("}");
   if (s === -1 || e === -1) return null;
   try { return JSON.parse(text.slice(s, e + 1)); } catch {}
   let partial = text.slice(s, e + 1);
@@ -60,10 +27,7 @@ function safeParseJSON(text) {
     if (escaped) { escaped = false; continue; }
     if (c === "\\" && inStr) { escaped = true; continue; }
     if (c === '"') { inStr = !inStr; continue; }
-    if (!inStr) {
-      if (c === "{" || c === "[") opens++;
-      if (c === "}" || c === "]") opens--;
-    }
+    if (!inStr) { if (c === "{" || c === "[") opens++; if (c === "}" || c === "]") opens--; }
   }
   try { return JSON.parse(partial + "]}}".slice(0, Math.max(0, opens))); } catch {}
   return null;
@@ -73,9 +37,7 @@ function computeScore(analysis) {
   if (!analysis) return 0;
   const riskMap = { LOW: 90, MEDIUM: 65, HIGH: 35, CRITICAL: 10 };
   let score = riskMap[analysis.duration_risk] || 50;
-  (analysis.issues || []).forEach(i => {
-    score -= { CRITICAL: 12, HIGH: 8, MEDIUM: 4, LOW: 1 }[i.severity] || 0;
-  });
+  (analysis.issues || []).forEach(i => { score -= { CRITICAL: 12, HIGH: 8, MEDIUM: 4, LOW: 1 }[i.severity] || 0; });
   return Math.max(0, Math.min(100, Math.round(score)));
 }
 
@@ -83,22 +45,17 @@ function Gauge({ score }) {
   const color = score >= 75 ? THEME.green : score >= 45 ? THEME.accent : THEME.red;
   const label = score >= 75 ? "HEALTHY" : score >= 45 ? "DEGRADED" : "CRITICAL";
   const r = 54, cx = 70, cy = 70;
-  const startAngle = -210, totalDeg = 240;
-  const pct = score / 100;
   const toRad = d => (d * Math.PI) / 180;
   const arcX = deg => cx + r * Math.cos(toRad(deg));
   const arcY = deg => cy + r * Math.sin(toRad(deg));
-  const endDeg = startAngle + totalDeg * pct;
-  const largeArc = totalDeg * pct > 180 ? 1 : 0;
+  const startAngle = -210, totalDeg = 240;
+  const endDeg = startAngle + totalDeg * (score / 100);
+  const largeArc = totalDeg * (score / 100) > 180 ? 1 : 0;
   const bgEndDeg = startAngle + totalDeg;
   return (
     <svg viewBox="0 0 140 110" style={{ width: "100%", maxWidth: 180 }}>
-      <path d={`M ${arcX(startAngle)} ${arcY(startAngle)} A ${r} ${r} 0 1 1 ${arcX(bgEndDeg)} ${arcY(bgEndDeg)}`}
-        fill="none" stroke={THEME.border} strokeWidth="10" strokeLinecap="round" />
-      {score > 0 && (
-        <path d={`M ${arcX(startAngle)} ${arcY(startAngle)} A ${r} ${r} 0 ${largeArc} 1 ${arcX(endDeg)} ${arcY(endDeg)}`}
-          fill="none" stroke={color} strokeWidth="10" strokeLinecap="round" />
-      )}
+      <path d={`M ${arcX(startAngle)} ${arcY(startAngle)} A ${r} ${r} 0 1 1 ${arcX(bgEndDeg)} ${arcY(bgEndDeg)}`} fill="none" stroke={THEME.border} strokeWidth="10" strokeLinecap="round" />
+      {score > 0 && <path d={`M ${arcX(startAngle)} ${arcY(startAngle)} A ${r} ${r} 0 ${largeArc} 1 ${arcX(endDeg)} ${arcY(endDeg)}`} fill="none" stroke={color} strokeWidth="10" strokeLinecap="round" />}
       <text x={cx} y={cy + 6} textAnchor="middle" fill={color} fontSize="22" fontWeight="700" fontFamily="monospace">{score}</text>
       <text x={cx} y={cy + 22} textAnchor="middle" fill={THEME.textMuted} fontSize="9" fontFamily="monospace" letterSpacing="1">{label}</text>
     </svg>
@@ -112,8 +69,7 @@ function BarChart({ data }) {
   return (
     <svg viewBox={`0 0 ${labelW + barW + 60} ${total}`} style={{ width: "100%", overflow: "visible" }}>
       {data.map((d, i) => {
-        const y = i * (h + gap);
-        const bw = Math.max(4, (d.value / max) * barW);
+        const y = i * (h + gap); const bw = Math.max(4, (d.value / max) * barW);
         return (
           <g key={i}>
             <text x={labelW - 8} y={y + h / 2 + 4} textAnchor="end" fill={THEME.textSecondary} fontSize="10" fontFamily="monospace">{d.label}</text>
@@ -133,27 +89,17 @@ function DonutChart({ segments, size = 110 }) {
   let cumulative = 0;
   const toRad = d => (d * Math.PI) / 180;
   const slices = segments.map(seg => {
-    const startDeg = (cumulative / total) * 360 - 90;
-    cumulative += seg.value;
+    const startDeg = (cumulative / total) * 360 - 90; cumulative += seg.value;
     const endDeg = (cumulative / total) * 360 - 90;
     const large = (endDeg - startDeg) > 180 ? 1 : 0;
-    const x1 = cx + r * Math.cos(toRad(startDeg));
-    const y1 = cy + r * Math.sin(toRad(startDeg));
-    const x2 = cx + r * Math.cos(toRad(endDeg));
-    const y2 = cy + r * Math.sin(toRad(endDeg));
-    return { ...seg, x1, y1, x2, y2, large };
+    return { ...seg, x1: cx + r * Math.cos(toRad(startDeg)), y1: cy + r * Math.sin(toRad(startDeg)), x2: cx + r * Math.cos(toRad(endDeg)), y2: cy + r * Math.sin(toRad(endDeg)), large };
   });
   return (
     <svg viewBox={`0 0 ${size} ${size}`} style={{ width: size, height: size, flexShrink: 0 }}>
-      {total === 0
-        ? <circle cx={cx} cy={cy} r={r} fill="none" stroke={THEME.border} strokeWidth={stroke} />
-        : slices.map((s, i) => (
-          s.value === 0 ? null :
-          s.value === total
-            ? <circle key={i} cx={cx} cy={cy} r={r} fill="none" stroke={s.color} strokeWidth={stroke} opacity="0.85" />
-            : <path key={i} d={`M ${s.x1} ${s.y1} A ${r} ${r} 0 ${s.large} 1 ${s.x2} ${s.y2}`}
-                fill="none" stroke={s.color} strokeWidth={stroke} strokeLinecap="butt" opacity="0.85" />
-        ))}
+      {slices.map((s, i) => s.value === 0 ? null : s.value === total
+        ? <circle key={i} cx={cx} cy={cy} r={r} fill="none" stroke={s.color} strokeWidth={stroke} opacity="0.85" />
+        : <path key={i} d={`M ${s.x1} ${s.y1} A ${r} ${r} 0 ${s.large} 1 ${s.x2} ${s.y2}`} fill="none" stroke={s.color} strokeWidth={stroke} strokeLinecap="butt" opacity="0.85" />
+      )}
       <text x={cx} y={cy + 4} textAnchor="middle" fill={THEME.textPrimary} fontSize="16" fontWeight="700" fontFamily="monospace">{total}</text>
       <text x={cx} y={cy + 16} textAnchor="middle" fill={THEME.textMuted} fontSize="8" fontFamily="monospace">TOTAL</text>
     </svg>
@@ -161,14 +107,14 @@ function DonutChart({ segments, size = 110 }) {
 }
 
 function PhaseTimeline({ phases }) {
-  const statusColor = s => ({ OK: THEME.green, WARNING: THEME.accent, CRITICAL: THEME.red }[s] || THEME.textMuted);
+  const sc = s => ({ OK: THEME.green, WARNING: THEME.accent, CRITICAL: THEME.red }[s] || THEME.textMuted);
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
       {phases.map((p, i) => (
         <div key={i} style={{ display: "flex", alignItems: "center", gap: 10 }}>
-          <div style={{ width: 10, height: 10, borderRadius: "50%", background: statusColor(p.status), flexShrink: 0, boxShadow: `0 0 8px ${statusColor(p.status)}88` }} />
-          <div style={{ flex: 1, height: 30, borderRadius: 4, background: `${statusColor(p.status)}18`, border: `1px solid ${statusColor(p.status)}44`, display: "flex", alignItems: "center", padding: "0 12px", gap: 8 }}>
-            <span style={{ fontSize: 11, fontWeight: 700, color: statusColor(p.status), minWidth: 64 }}>{p.status}</span>
+          <div style={{ width: 10, height: 10, borderRadius: "50%", background: sc(p.status), flexShrink: 0, boxShadow: `0 0 8px ${sc(p.status)}88` }} />
+          <div style={{ flex: 1, height: 30, borderRadius: 4, background: `${sc(p.status)}18`, border: `1px solid ${sc(p.status)}44`, display: "flex", alignItems: "center", padding: "0 12px", gap: 8 }}>
+            <span style={{ fontSize: 11, fontWeight: 700, color: sc(p.status), minWidth: 64 }}>{p.status}</span>
             <span style={{ fontSize: 11, color: THEME.textPrimary }}>{p.phase}</span>
             <span style={{ fontSize: 10, color: THEME.textMuted, marginLeft: "auto" }}>{p.note || p.duration_note}</span>
           </div>
@@ -179,11 +125,25 @@ function PhaseTimeline({ phases }) {
 }
 
 export default function T24COBAnalyser() {
-  const [logs, setLogs] = useState("");
+  // Log file state
+  const [logFile, setLogFile] = useState(null);
+  const [logContent, setLogContent] = useState("");
+  const [logType, setLogType] = useState("COB");
+  const [logError, setLogError] = useState("");
+  const logInputRef = useRef(null);
+
+  // Knowledge base state
+  const [kbFiles, setKbFiles] = useState([]); // [{name, content, size}]
+  const [kbDragging, setKbDragging] = useState(false);
+  const kbInputRef = useRef(null);
+
+  // Analysis state
   const [analysis, setAnalysis] = useState(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
   const [activeTab, setActiveTab] = useState("input");
+
+  // Chat state
   const [chatMessages, setChatMessages] = useState([]);
   const [chatInput, setChatInput] = useState("");
   const [chatLoading, setChatLoading] = useState(false);
@@ -191,7 +151,49 @@ export default function T24COBAnalyser() {
 
   useEffect(() => { chatEndRef.current?.scrollIntoView({ behavior: "smooth" }); }, [chatMessages]);
 
-  // ── API call goes to /api/analyze (Vercel proxy) ──
+  // ── Read uploaded log file ──
+  function handleLogFile(file) {
+    if (!file) return;
+    const allowed = [".log", ".txt", ".out", ".err", ".trace"];
+    const ext = file.name.toLowerCase();
+    if (!allowed.some(a => ext.endsWith(a)) && !ext.includes("log") && !ext.includes("txt")) {
+      setLogError("Please upload a .log, .txt, .out or .trace file");
+      return;
+    }
+    setLogError("");
+    setLogFile(file);
+    const reader = new FileReader();
+    reader.onload = e => setLogContent(e.target.result);
+    reader.readAsText(file);
+  }
+
+  // ── Read knowledge base files (PDF text extraction via FileReader, txt direct) ──
+  function handleKBFiles(files) {
+    Array.from(files).forEach(file => {
+      if (kbFiles.find(f => f.name === file.name)) return; // skip duplicates
+      const reader = new FileReader();
+      reader.onload = e => {
+        let content = e.target.result;
+        // For binary/PDF just grab readable ASCII text
+        if (typeof content !== "string") content = "";
+        // Limit per file to 2000 chars to stay within token budget
+        const trimmed = content.replace(/[^\x20-\x7E\n\r\t]/g, " ").replace(/\s+/g, " ").trim().slice(0, 2000);
+        setKbFiles(prev => [...prev, { name: file.name, content: trimmed, size: file.size }]);
+      };
+      reader.readAsText(file);
+    });
+  }
+
+  function removeKB(name) { setKbFiles(prev => prev.filter(f => f.name !== name)); }
+
+  // ── Build knowledge base context string ──
+  function buildKBContext() {
+    if (kbFiles.length === 0) return "";
+    return "\n\nKNOWLEDGE BASE (use this to improve analysis and fixes):\n" +
+      kbFiles.map(f => `=== ${f.name} ===\n${f.content}`).join("\n\n");
+  }
+
+  // ── API proxy call ──
   async function callAPI(body) {
     const res = await fetch("/api/analyze", {
       method: "POST",
@@ -203,59 +205,56 @@ export default function T24COBAnalyser() {
     return data;
   }
 
+  // ── Analyse logs ──
   async function analyzeLogs() {
-    if (!logs.trim()) return;
+    if (!logContent.trim()) return;
     setLoading(true); setError(""); setAnalysis(null);
     try {
-      const snippet = logs.slice(0, 1500);
+      const snippet = logContent.slice(0, 1500);
+      const kbContext = buildKBContext();
       const data = await callAPI({
         model: "claude-haiku-4-5-20251001",
         max_tokens: 1000,
-        system: SYSTEM_PROMPT,
-        messages: [{ role: "user", content: `Analyze:\n${snippet}` }],
+        system: SYSTEM_PROMPT + kbContext,
+        messages: [{ role: "user", content: `Log type: ${logType}\n\nAnalyze:\n${snippet}` }],
       });
       const raw = data.content?.map(b => b.text || "").join("") || "";
       const parsed = safeParseJSON(raw);
       if (!parsed) throw new Error("Could not parse response. Try a shorter log.");
       setAnalysis(parsed);
       setActiveTab("dashboard");
-    } catch (e) {
-      setError(e.message);
-    } finally { setLoading(false); }
+    } catch (e) { setError(e.message); }
+    finally { setLoading(false); }
   }
 
+  // ── Chat with full context ──
   async function sendChat() {
     if (!chatInput.trim()) return;
     const history = [...chatMessages, { role: "user", content: chatInput }];
     setChatMessages(history); setChatInput(""); setChatLoading(true);
-
-    // Inject current analysis into system prompt so chat is fully synced
+    const kbContext = buildKBContext();
     const analysisContext = analysis ? [
       "CURRENT SESSION ANALYSIS:",
+      `Log Type: ${logType} | File: ${logFile?.name || "sample"}`,
       `Summary: ${analysis.summary}`,
       `Risk: ${analysis.duration_risk} | Score: ${computeScore(analysis)}/100`,
-      "Issues:",
-      ...(analysis.issues || []).map(i => `  [${i.severity}] ${i.title} — Fix: ${i.fix}`),
-      "Optimizations:",
-      ...(analysis.optimizations || []).map(o => `  ${o.title}: ${o.action} (${o.expected_gain})`),
+      "Issues:", ...(analysis.issues || []).map(i => `  [${i.severity}] ${i.title} — Fix: ${i.fix}`),
+      "Optimizations:", ...(analysis.optimizations || []).map(o => `  ${o.title}: ${o.action} (${o.expected_gain})`),
       `Priority Actions: ${(analysis.priority_actions || []).join(", ")}`,
       `Phases: ${(analysis.cob_phases || []).map(p => `${p.phase}=${p.status}`).join(", ")}`,
-      "",
-      "Answer questions referencing THIS specific analysis. Be direct and specific.",
+      "", "Answer referencing THIS specific analysis. Be direct and specific.",
     ].join("\n") : "No analysis run yet. Answer general T24 COB questions.";
-
     try {
       const data = await callAPI({
         model: "claude-haiku-4-5-20251001",
         max_tokens: 1000,
-        system: `You are a T24 COB performance expert inside the T24 COB Analyser tool. Use specific T24 field names and fixes.\n\n${analysisContext}`,
+        system: `You are a T24 COB performance expert inside the T24 COB Analyser tool. Use specific T24 field names and fixes.\n\n${analysisContext}${kbContext}`,
         messages: history,
       });
       const text = data.content?.map(b => b.text || "").join("") || "Error — try again.";
       setChatMessages(prev => [...prev, { role: "assistant", content: text }]);
-    } catch {
-      setChatMessages(prev => [...prev, { role: "assistant", content: "Error — try again." }]);
-    } finally { setChatLoading(false); }
+    } catch { setChatMessages(prev => [...prev, { role: "assistant", content: "Error — try again." }]); }
+    finally { setChatLoading(false); }
   }
 
   const sev = s => ({ CRITICAL: THEME.red, HIGH: "#ff8c42", MEDIUM: THEME.accent, LOW: THEME.green }[s] || THEME.textSecondary);
@@ -266,28 +265,27 @@ export default function T24COBAnalyser() {
   (analysis?.issues || []).forEach(i => { catCounts[i.category] = (catCounts[i.category] || 0) + 1; });
   const catColors = { "Database Index": THEME.blue, "TSA Services": THEME.purple, "AA Architecture": "#ff8c42", "OFS Logging": THEME.green, "Batch Config": THEME.accent, "PGM File": "#ff6eb4", Other: THEME.textMuted };
   const barData = Object.entries(catCounts).map(([k, v]) => ({ label: k, value: v, color: catColors[k] || THEME.accent }));
-
   const sevCounts = { CRITICAL: 0, HIGH: 0, MEDIUM: 0, LOW: 0 };
   (analysis?.issues || []).forEach(i => { if (sevCounts[i.severity] !== undefined) sevCounts[i.severity]++; });
   const donutSegments = [
     { label: "CRITICAL", value: sevCounts.CRITICAL, color: THEME.red },
-    { label: "HIGH",     value: sevCounts.HIGH,     color: "#ff8c42" },
-    { label: "MEDIUM",   value: sevCounts.MEDIUM,   color: THEME.accent },
-    { label: "LOW",      value: sevCounts.LOW,       color: THEME.green },
+    { label: "HIGH", value: sevCounts.HIGH, color: "#ff8c42" },
+    { label: "MEDIUM", value: sevCounts.MEDIUM, color: THEME.accent },
+    { label: "LOW", value: sevCounts.LOW, color: THEME.green },
   ];
-
   const metricCards = analysis ? [
     { label: "COB HEALTH SCORE", value: `${score}/100`, color: score >= 75 ? THEME.green : score >= 45 ? THEME.accent : THEME.red },
-    { label: "RISK LEVEL",       value: analysis.duration_risk || "—", color: sev(analysis.duration_risk) },
-    { label: "ISSUES FOUND",     value: analysis.issues?.length || 0,  color: THEME.blue },
-    { label: "OPTIMIZATIONS",    value: analysis.optimizations?.length || 0, color: THEME.purple },
+    { label: "RISK LEVEL", value: analysis.duration_risk || "—", color: sev(analysis.duration_risk) },
+    { label: "ISSUES FOUND", value: analysis.issues?.length || 0, color: THEME.blue },
+    { label: "OPTIMIZATIONS", value: analysis.optimizations?.length || 0, color: THEME.purple },
   ] : [];
 
   const TABS = [
-    ["input",     "📋 LOG INPUT",    false],
-    ["dashboard", "📊 DASHBOARD",    !analysis],
-    ["analysis",  "🔬 ANALYSIS",     !analysis],
-    ["chat",      "💬 EXPERT CHAT",  false],
+    ["input", "📋 LOG INPUT", false],
+    ["kb", "📚 KNOWLEDGE BASE", false],
+    ["dashboard", "📊 DASHBOARD", !analysis],
+    ["analysis", "🔬 ANALYSIS", !analysis],
+    ["chat", "💬 EXPERT CHAT", false],
   ];
 
   return (
@@ -296,9 +294,10 @@ export default function T24COBAnalyser() {
         @import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;600;700&family=Syne:wght@700;800&display=swap');
         *{box-sizing:border-box;}
         ::-webkit-scrollbar{width:4px} ::-webkit-scrollbar-thumb{background:#2a3545;border-radius:2px}
-        textarea,input{outline:none;}
+        textarea,input,select{outline:none;}
         .qbtn:hover{background:rgba(240,165,0,0.1)!important;border-color:#f0a500!important;}
         .abtn:hover:not(:disabled){background:#d49200!important;transform:translateY(-1px);}
+        .dz:hover{border-color:#f0a500!important;background:rgba(240,165,0,0.05)!important;}
         @keyframes spin{to{transform:rotate(360deg)}}
         @keyframes fadeIn{from{opacity:0;transform:translateY(6px)}to{opacity:1;transform:translateY(0)}}
         @keyframes pulse{0%,100%{opacity:1}50%{opacity:0.3}}
@@ -311,7 +310,7 @@ export default function T24COBAnalyser() {
         .card-hover{transition:all 0.2s;}
       `}</style>
 
-      {/* ── HEADER ── */}
+      {/* HEADER */}
       <div style={{ background: THEME.surface, borderBottom: `1px solid ${THEME.border}`, padding: "16px 24px", display: "flex", alignItems: "center", gap: 14 }}>
         <div style={{ width: 38, height: 38, borderRadius: 8, background: `${THEME.accent}22`, border: `1px solid ${THEME.accent}55`, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 17 }}>⚡</div>
         <div>
@@ -320,85 +319,259 @@ export default function T24COBAnalyser() {
           </div>
           <div style={{ fontSize: 10, color: THEME.textMuted, letterSpacing: "2px", marginTop: 1 }}>TEMENOS CORE BANKING · EOD INTELLIGENCE</div>
         </div>
-        {analysis && (
-          <div style={{ marginLeft: "auto", display: "flex", alignItems: "center", gap: 10 }}>
-            <div style={{ padding: "3px 10px", borderRadius: 6, fontSize: 11, fontWeight: 700, background: `${sev(analysis.duration_risk)}18`, border: `1px solid ${sev(analysis.duration_risk)}44`, color: sev(analysis.duration_risk) }}>
-              {analysis.duration_risk} RISK
+        <div style={{ marginLeft: "auto", display: "flex", alignItems: "center", gap: 10 }}>
+          {kbFiles.length > 0 && (
+            <div style={{ padding: "3px 10px", borderRadius: 6, fontSize: 10, fontWeight: 700, background: `${THEME.purple}18`, border: `1px solid ${THEME.purple}44`, color: THEME.purple }}>
+              📚 {kbFiles.length} KB FILE{kbFiles.length > 1 ? "S" : ""}
             </div>
-            <div style={{ padding: "3px 10px", borderRadius: 6, fontSize: 11, fontWeight: 700, background: `${score >= 75 ? THEME.green : score >= 45 ? THEME.accent : THEME.red}18`, border: `1px solid ${score >= 75 ? THEME.green : score >= 45 ? THEME.accent : THEME.red}44`, color: score >= 75 ? THEME.green : score >= 45 ? THEME.accent : THEME.red }}>
-              SCORE {score}/100
-            </div>
-          </div>
-        )}
+          )}
+          {analysis && <>
+            <div style={{ padding: "3px 10px", borderRadius: 6, fontSize: 11, fontWeight: 700, background: `${sev(analysis.duration_risk)}18`, border: `1px solid ${sev(analysis.duration_risk)}44`, color: sev(analysis.duration_risk) }}>{analysis.duration_risk} RISK</div>
+            <div style={{ padding: "3px 10px", borderRadius: 6, fontSize: 11, fontWeight: 700, background: `${score >= 75 ? THEME.green : score >= 45 ? THEME.accent : THEME.red}18`, border: `1px solid ${score >= 75 ? THEME.green : score >= 45 ? THEME.accent : THEME.red}44`, color: score >= 75 ? THEME.green : score >= 45 ? THEME.accent : THEME.red }}>SCORE {score}/100</div>
+          </>}
+        </div>
       </div>
 
-      {/* ── TABS ── */}
-      <div style={{ display: "flex", background: THEME.surface, borderBottom: `1px solid ${THEME.border}`, padding: "0 24px" }}>
+      {/* TABS */}
+      <div style={{ display: "flex", background: THEME.surface, borderBottom: `1px solid ${THEME.border}`, padding: "0 24px", overflowX: "auto" }}>
         {TABS.map(([id, label, disabled]) => (
           <button key={id} onClick={() => !disabled && setActiveTab(id)} style={{
-            padding: "10px 16px", border: "none", background: "transparent",
-            cursor: disabled ? "default" : "pointer",
-            fontSize: 10, fontWeight: 700, letterSpacing: "1.5px", fontFamily: "'JetBrains Mono',monospace",
+            padding: "10px 16px", border: "none", background: "transparent", whiteSpace: "nowrap",
+            cursor: disabled ? "default" : "pointer", fontSize: 10, fontWeight: 700, letterSpacing: "1.5px",
+            fontFamily: "'JetBrains Mono',monospace",
             color: activeTab === id ? THEME.accent : disabled ? THEME.textMuted : THEME.textSecondary,
             borderBottom: activeTab === id ? `2px solid ${THEME.accent}` : "2px solid transparent",
             marginBottom: -1, opacity: disabled ? 0.35 : 1, transition: "all 0.2s"
-          }}>{label}</button>
+          }}>{label}{id === "kb" && kbFiles.length > 0 ? ` (${kbFiles.length})` : ""}</button>
         ))}
       </div>
 
       <div style={{ padding: "20px 24px", maxWidth: 1050, margin: "0 auto" }}>
 
-        {/* ── INPUT TAB ── */}
+        {/* ── LOG INPUT TAB ── */}
         {activeTab === "input" && (
-          <div className="fade" style={{ display: "grid", gridTemplateColumns: "1fr 290px", gap: 18 }}>
+          <div className="fade" style={{ display: "grid", gridTemplateColumns: "1fr 280px", gap: 18 }}>
             <div>
-              <div style={{ fontSize: 10, color: THEME.textMuted, letterSpacing: "2px", marginBottom: 8, fontWeight: 700 }}>PASTE COB LOGS</div>
-              <div style={{ position: "relative" }}>
-                <textarea value={logs} onChange={e => setLogs(e.target.value)}
-                  placeholder={`[22:14:33] COB.START\n[22:18:44] WARNING: F.ACCOUNT full table scan\n[22:24:55] ERROR: IC.COB timeout 356s\n...paste your T24 COB logs here`}
-                  style={{ width: "100%", height: 340, background: THEME.surfaceAlt, border: `1px solid ${logs ? THEME.borderBright : THEME.border}`, borderRadius: 8, color: THEME.textPrimary, fontSize: 12, padding: 14, resize: "vertical", fontFamily: "'JetBrains Mono',monospace", lineHeight: 1.7 }} />
-                {logs && <div style={{ position: "absolute", bottom: 10, right: 12, fontSize: 10, color: THEME.textMuted }}>{logs.split("\n").length} LINES</div>}
+              <div style={{ display: "flex", gap: 10, marginBottom: 14, alignItems: "center" }}>
+                <div style={{ fontSize: 10, color: THEME.textMuted, letterSpacing: "2px", fontWeight: 700 }}>LOG TYPE:</div>
+                <select value={logType} onChange={e => setLogType(e.target.value)} style={{
+                  background: THEME.surfaceAlt, border: `1px solid ${THEME.border}`, borderRadius: 6,
+                  color: THEME.textPrimary, fontSize: 11, padding: "5px 10px", fontFamily: "'JetBrains Mono',monospace", cursor: "pointer"
+                }}>
+                  {LOG_TYPES.map(t => <option key={t} value={t}>{t}</option>)}
+                </select>
               </div>
-              {error && <div style={{ marginTop: 10, padding: "10px 14px", borderRadius: 6, background: `${THEME.red}15`, border: `1px solid ${THEME.red}44`, color: THEME.red, fontSize: 12 }}>⚠ {error}</div>}
-              <div style={{ display: "flex", gap: 10, marginTop: 12 }}>
-                <button className="abtn" onClick={analyzeLogs} disabled={loading || !logs.trim()} style={{
-                  flex: 1, padding: "12px", background: loading || !logs.trim() ? THEME.surfaceAlt : THEME.accent,
-                  border: `1px solid ${loading || !logs.trim() ? THEME.border : THEME.accent}`, borderRadius: 8,
-                  color: loading || !logs.trim() ? THEME.textMuted : "#000", fontSize: 11, fontWeight: 700,
-                  cursor: loading || !logs.trim() ? "not-allowed" : "pointer", letterSpacing: "1.5px",
+
+              {/* Drop zone */}
+              <div className="dz" onClick={() => logInputRef.current?.click()}
+                onDragOver={e => { e.preventDefault(); }}
+                onDrop={e => { e.preventDefault(); handleLogFile(e.dataTransfer.files[0]); }}
+                style={{
+                  border: `2px dashed ${logFile ? THEME.green : THEME.border}`, borderRadius: 10,
+                  padding: "32px 24px", textAlign: "center", cursor: "pointer",
+                  background: logFile ? `${THEME.green}08` : THEME.surfaceAlt,
+                  transition: "all 0.2s", marginBottom: 12
+                }}>
+                <input ref={logInputRef} type="file" accept=".log,.txt,.out,.err,.trace" style={{ display: "none" }}
+                  onChange={e => handleLogFile(e.target.files[0])} />
+                {logFile ? (
+                  <div>
+                    <div style={{ fontSize: 24, marginBottom: 8 }}>✅</div>
+                    <div style={{ fontSize: 13, fontWeight: 700, color: THEME.green }}>{logFile.name}</div>
+                    <div style={{ fontSize: 10, color: THEME.textMuted, marginTop: 4 }}>
+                      {(logFile.size / 1024).toFixed(1)} KB · {logContent.split("\n").length} LINES
+                    </div>
+                    <div style={{ fontSize: 10, color: THEME.textMuted, marginTop: 6 }}>Click to replace</div>
+                  </div>
+                ) : (
+                  <div>
+                    <div style={{ fontSize: 32, marginBottom: 10 }}>📂</div>
+                    <div style={{ fontSize: 13, fontWeight: 700, color: THEME.textSecondary, marginBottom: 6 }}>
+                      Drop your log file here or click to browse
+                    </div>
+                    <div style={{ fontSize: 10, color: THEME.textMuted, marginBottom: 10 }}>
+                      Supports: .log .txt .out .err .trace
+                    </div>
+                    <div style={{ display: "flex", gap: 6, justifyContent: "center", flexWrap: "wrap" }}>
+                      {["WAS", "EDB.log", "MDB.log", "JMS", "IBM MQ", "DATABASE.log", "Runtime.log"].map(t => (
+                        <span key={t} style={{ fontSize: 9, padding: "2px 7px", borderRadius: 4, background: THEME.bg, border: `1px solid ${THEME.border}`, color: THEME.textMuted }}>{t}</span>
+                      ))}
+                    </div>
+                  </div>
+                )}
+              </div>
+
+              {logFile && logContent && (
+                <div style={{ marginBottom: 12, padding: "10px 14px", borderRadius: 8, background: THEME.surfaceAlt, border: `1px solid ${THEME.border}` }}>
+                  <div style={{ fontSize: 10, color: THEME.textMuted, letterSpacing: "1px", marginBottom: 6, fontWeight: 700 }}>LOG PREVIEW (first 8 lines)</div>
+                  <div style={{ fontSize: 11, color: THEME.textSecondary, lineHeight: 1.8, whiteSpace: "pre-wrap" }}>
+                    {logContent.split("\n").slice(0, 8).join("\n")}
+                  </div>
+                </div>
+              )}
+
+              {(error || logError) && (
+                <div style={{ marginBottom: 10, padding: "10px 14px", borderRadius: 6, background: `${THEME.red}15`, border: `1px solid ${THEME.red}44`, color: THEME.red, fontSize: 12 }}>
+                  ⚠ {error || logError}
+                </div>
+              )}
+
+              <div style={{ display: "flex", gap: 10 }}>
+                <button className="abtn" onClick={analyzeLogs} disabled={loading || !logContent.trim()} style={{
+                  flex: 1, padding: "12px", background: loading || !logContent.trim() ? THEME.surfaceAlt : THEME.accent,
+                  border: `1px solid ${loading || !logContent.trim() ? THEME.border : THEME.accent}`, borderRadius: 8,
+                  color: loading || !logContent.trim() ? THEME.textMuted : "#000", fontSize: 11, fontWeight: 700,
+                  cursor: loading || !logContent.trim() ? "not-allowed" : "pointer", letterSpacing: "1.5px",
                   transition: "all 0.2s", fontFamily: "'JetBrains Mono',monospace",
                   display: "flex", alignItems: "center", justifyContent: "center", gap: 8
                 }}>
                   {loading
-                    ? <><div className="spin" style={{ width: 13, height: 13, borderRadius: "50%", border: `2px solid #555`, borderTopColor: THEME.accent }} />ANALYSING...</>
-                    : "⚡ ANALYSE COB PERFORMANCE"}
+                    ? <><div className="spin" style={{ width: 13, height: 13, borderRadius: "50%", border: "2px solid #555", borderTopColor: THEME.accent }} />ANALYSING {logType} LOG...</>
+                    : `⚡ ANALYSE ${logType} LOG`}
                 </button>
-                {logs && (
-                  <button onClick={() => { setLogs(""); setAnalysis(null); setError(""); }} style={{ padding: "12px 16px", background: "transparent", border: `1px solid ${THEME.border}`, borderRadius: 8, color: THEME.textMuted, fontSize: 11, cursor: "pointer", fontFamily: "'JetBrains Mono',monospace" }}>
+                {logFile && (
+                  <button onClick={() => { setLogFile(null); setLogContent(""); setAnalysis(null); setError(""); setLogError(""); }} style={{ padding: "12px 16px", background: "transparent", border: `1px solid ${THEME.border}`, borderRadius: 8, color: THEME.textMuted, fontSize: 11, cursor: "pointer", fontFamily: "'JetBrains Mono',monospace" }}>
                     CLEAR
                   </button>
                 )}
               </div>
             </div>
+
+            {/* Right panel */}
             <div>
-              <div style={{ fontSize: 10, color: THEME.textMuted, letterSpacing: "2px", marginBottom: 8, fontWeight: 700 }}>SAMPLE SCENARIOS</div>
-              {Object.entries(QUICK_LOGS).map(([label, log]) => (
-                <button key={label} className="qbtn" onClick={() => setLogs(log)} style={{ width: "100%", marginBottom: 9, padding: "12px 13px", background: THEME.surfaceAlt, border: `1px solid ${THEME.border}`, borderRadius: 8, color: THEME.textPrimary, cursor: "pointer", textAlign: "left", fontSize: 12, fontFamily: "'JetBrains Mono',monospace", transition: "all 0.2s" }}>
-                  <div style={{ fontWeight: 700, color: THEME.accent, marginBottom: 3 }}>
-                    {label === "COB Timeout" ? "⏱" : label === "Index Issues" ? "🗂" : "🏗"} {label}
-                  </div>
-                  <div style={{ fontSize: 10, color: THEME.textMuted }}>
-                    {label === "COB Timeout" && "IC.COB timeout · 128min run"}
-                    {label === "Index Issues" && "Missing indexes · full table scans"}
-                    {label === "AA Data Quality" && "Unauthorized records · 75min delay"}
-                  </div>
-                </button>
+              <div style={{ fontSize: 10, color: THEME.textMuted, letterSpacing: "2px", marginBottom: 8, fontWeight: 700 }}>SUPPORTED LOG TYPES</div>
+              {[
+                { name: "WAS", desc: "WebSphere App Server logs" },
+                { name: "EDB.log", desc: "T24 EDB activity logs" },
+                { name: "MDB.log", desc: "Message-Driven Bean logs" },
+                { name: "JMS", desc: "Java Message Service logs" },
+                { name: "IBM MQ", desc: "MQ broker & queue logs" },
+                { name: "DATABASE.log", desc: "Oracle/SQL Server logs" },
+                { name: "Runtime.log", desc: "T24 runtime & JVM logs" },
+              ].map(({ name, desc }) => (
+                <div key={name} style={{ display: "flex", gap: 10, alignItems: "center", marginBottom: 8, padding: "8px 12px", borderRadius: 6, background: logType === name ? `${THEME.accent}12` : THEME.surfaceAlt, border: `1px solid ${logType === name ? THEME.accent + "44" : THEME.border}`, cursor: "pointer" }}
+                  onClick={() => setLogType(name)}>
+                  <span style={{ fontSize: 10, fontWeight: 700, color: logType === name ? THEME.accent : THEME.textMuted, minWidth: 72 }}>{name}</span>
+                  <span style={{ fontSize: 10, color: THEME.textMuted }}>{desc}</span>
+                </div>
               ))}
-              <div style={{ marginTop: 4, padding: 11, borderRadius: 8, background: `${THEME.accent}08`, border: `1px solid ${THEME.accent}22` }}>
-                <div style={{ fontSize: 10, color: THEME.accent, fontWeight: 700, marginBottom: 5, letterSpacing: "1px" }}>DETECTS</div>
-                {["DB index gaps", "Batch sequencing", "TSA agents", "AA data quality", "OFS verbosity", "PGM.FILE config"].map(i => (
-                  <div key={i} style={{ fontSize: 10, color: THEME.textSecondary, marginBottom: 2 }}><span style={{ color: THEME.green }}>▸</span> {i}</div>
+              {kbFiles.length > 0 && (
+                <div style={{ marginTop: 12, padding: "10px 12px", borderRadius: 8, background: `${THEME.purple}0a`, border: `1px solid ${THEME.purple}33` }}>
+                  <div style={{ fontSize: 10, color: THEME.purple, fontWeight: 700, marginBottom: 4 }}>📚 KB ACTIVE</div>
+                  <div style={{ fontSize: 10, color: THEME.textMuted }}>{kbFiles.length} knowledge file{kbFiles.length > 1 ? "s" : ""} will enhance this analysis</div>
+                </div>
+              )}
+            </div>
+          </div>
+        )}
+
+        {/* ── KNOWLEDGE BASE TAB ── */}
+        {activeTab === "kb" && (
+          <div className="fade">
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 300px", gap: 18 }}>
+              <div>
+                <div style={{ fontSize: 10, color: THEME.textMuted, letterSpacing: "2px", marginBottom: 4, fontWeight: 700 }}>KNOWLEDGE BASE UPLOAD</div>
+                <div style={{ fontSize: 11, color: THEME.textSecondary, marginBottom: 14, lineHeight: 1.6 }}>
+                  Upload T24 guides, manuals, or best-practice documents. These will be injected into every AI analysis and chat response to give context-aware, documentation-backed answers.
+                </div>
+
+                {/* KB Drop Zone */}
+                <div className="dz"
+                  onDragOver={e => { e.preventDefault(); setKbDragging(true); }}
+                  onDragLeave={() => setKbDragging(false)}
+                  onDrop={e => { e.preventDefault(); setKbDragging(false); handleKBFiles(e.dataTransfer.files); }}
+                  onClick={() => kbInputRef.current?.click()}
+                  style={{
+                    border: `2px dashed ${kbDragging ? THEME.purple : THEME.border}`, borderRadius: 10,
+                    padding: "36px 24px", textAlign: "center", cursor: "pointer",
+                    background: kbDragging ? `${THEME.purple}08` : THEME.surfaceAlt,
+                    transition: "all 0.2s", marginBottom: 16
+                  }}>
+                  <input ref={kbInputRef} type="file" accept=".txt,.pdf,.md,.log,.csv" multiple style={{ display: "none" }}
+                    onChange={e => handleKBFiles(e.target.files)} />
+                  <div style={{ fontSize: 32, marginBottom: 10 }}>📚</div>
+                  <div style={{ fontSize: 13, fontWeight: 700, color: THEME.textSecondary, marginBottom: 6 }}>
+                    Drop knowledge files here or click to browse
+                  </div>
+                  <div style={{ fontSize: 10, color: THEME.textMuted, marginBottom: 10 }}>
+                    Supports: .txt .pdf .md .log .csv · Multiple files allowed
+                  </div>
+                  <div style={{ display: "flex", gap: 6, justifyContent: "center", flexWrap: "wrap" }}>
+                    {["T24 COB Guide", "Performance Manual", "AA Architecture", "Index Best Practices", "OFS Reference"].map(t => (
+                      <span key={t} style={{ fontSize: 9, padding: "2px 7px", borderRadius: 4, background: THEME.bg, border: `1px solid ${THEME.border}`, color: THEME.textMuted }}>{t}</span>
+                    ))}
+                  </div>
+                </div>
+
+                {/* Uploaded KB files list */}
+                {kbFiles.length > 0 && (
+                  <div>
+                    <div style={{ fontSize: 10, color: THEME.textMuted, letterSpacing: "2px", marginBottom: 10, fontWeight: 700 }}>
+                      LOADED FILES — {kbFiles.length} DOCUMENT{kbFiles.length > 1 ? "S" : ""}
+                    </div>
+                    {kbFiles.map((f, i) => (
+                      <div key={i} style={{ display: "flex", alignItems: "flex-start", gap: 12, padding: "12px 14px", borderRadius: 8, background: THEME.surfaceAlt, border: `1px solid ${THEME.border}`, marginBottom: 8 }}>
+                        <div style={{ fontSize: 20, flexShrink: 0 }}>
+                          {f.name.endsWith(".pdf") ? "📄" : f.name.endsWith(".md") ? "📝" : "📃"}
+                        </div>
+                        <div style={{ flex: 1, minWidth: 0 }}>
+                          <div style={{ fontSize: 12, fontWeight: 700, color: THEME.textPrimary, marginBottom: 3, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{f.name}</div>
+                          <div style={{ fontSize: 10, color: THEME.textMuted, marginBottom: 6 }}>
+                            {(f.size / 1024).toFixed(1)} KB · {f.content.length} chars extracted · injected into AI context
+                          </div>
+                          <div style={{ fontSize: 10, color: THEME.textSecondary, lineHeight: 1.5, background: THEME.bg, padding: "6px 8px", borderRadius: 4, border: `1px solid ${THEME.border}`, whiteSpace: "pre-wrap", maxHeight: 60, overflow: "hidden" }}>
+                            {f.content.slice(0, 200)}...
+                          </div>
+                        </div>
+                        <button onClick={() => removeKB(f.name)} style={{ padding: "4px 8px", background: `${THEME.red}15`, border: `1px solid ${THEME.red}33`, borderRadius: 4, color: THEME.red, fontSize: 10, cursor: "pointer", flexShrink: 0, fontFamily: "'JetBrains Mono',monospace" }}>✕</button>
+                      </div>
+                    ))}
+                  </div>
+                )}
+
+                {kbFiles.length === 0 && (
+                  <div style={{ padding: 14, borderRadius: 8, background: `${THEME.accent}08`, border: `1px solid ${THEME.accent}22` }}>
+                    <div style={{ fontSize: 10, color: THEME.accent, fontWeight: 700, marginBottom: 8, letterSpacing: "1px" }}>HOW IT WORKS</div>
+                    {[
+                      "Upload your T24 documentation, guides or manuals",
+                      "Text is extracted and stored in browser memory",
+                      "Every AI analysis call includes your KB as context",
+                      "Expert Chat answers are grounded in your documents",
+                      "Remove files anytime — changes apply immediately",
+                    ].map((s, i) => (
+                      <div key={i} style={{ fontSize: 11, color: THEME.textSecondary, marginBottom: 5, display: "flex", gap: 8 }}>
+                        <span style={{ color: THEME.accent, fontWeight: 700 }}>{i + 1}.</span>{s}
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+
+              {/* Right info panel */}
+              <div>
+                <div style={{ fontSize: 10, color: THEME.textMuted, letterSpacing: "2px", marginBottom: 8, fontWeight: 700 }}>RECOMMENDED DOCS</div>
+                {[
+                  { icon: "📘", title: "T24 COB Operations Guide", desc: "Batch sequencing, error handling" },
+                  { icon: "📗", title: "Temenos AA Architecture", desc: "EOD/SOD process documentation" },
+                  { icon: "📙", title: "T24 Index Strategy Guide", desc: "STANDARD.SELECTION best practices" },
+                  { icon: "📕", title: "OFS Performance Manual", desc: "Logging and source configuration" },
+                  { icon: "📒", title: "TSA.SERVICES Reference", desc: "Agent allocation and tuning" },
+                  { icon: "📓", title: "Database Tuning Guide", desc: "Oracle/SQL Server for T24" },
+                ].map((d, i) => (
+                  <div key={i} style={{ padding: "10px 12px", borderRadius: 8, background: THEME.surfaceAlt, border: `1px solid ${THEME.border}`, marginBottom: 8, display: "flex", gap: 10 }}>
+                    <span style={{ fontSize: 16 }}>{d.icon}</span>
+                    <div>
+                      <div style={{ fontSize: 11, fontWeight: 700, color: THEME.textPrimary, marginBottom: 2 }}>{d.title}</div>
+                      <div style={{ fontSize: 10, color: THEME.textMuted }}>{d.desc}</div>
+                    </div>
+                  </div>
                 ))}
+                <div style={{ marginTop: 12, padding: "10px 12px", borderRadius: 8, background: `${THEME.blue}0a`, border: `1px solid ${THEME.blue}33` }}>
+                  <div style={{ fontSize: 10, color: THEME.blue, fontWeight: 700, marginBottom: 4 }}>💡 TIP</div>
+                  <div style={{ fontSize: 10, color: THEME.textMuted, lineHeight: 1.6 }}>
+                    PDF content is extracted as plain text. For best results, use text-based PDFs rather than scanned images.
+                  </div>
+                </div>
               </div>
             </div>
           </div>
@@ -440,9 +613,7 @@ export default function T24COBAnalyser() {
               </div>
               <div style={{ padding: "16px 14px", borderRadius: 10, background: THEME.surfaceAlt, border: `1px solid ${THEME.border}` }}>
                 <div style={{ fontSize: 9, color: THEME.textMuted, letterSpacing: "1.5px", marginBottom: 12, fontWeight: 700 }}>ISSUES BY CATEGORY</div>
-                {barData.length > 0
-                  ? <BarChart data={barData} />
-                  : <div style={{ fontSize: 11, color: THEME.textMuted, paddingTop: 20 }}>No category data</div>}
+                {barData.length > 0 ? <BarChart data={barData} /> : <div style={{ fontSize: 11, color: THEME.textMuted, paddingTop: 20 }}>No category data</div>}
               </div>
             </div>
             {analysis.cob_phases?.length > 0 && (
@@ -480,7 +651,7 @@ export default function T24COBAnalyser() {
             <div style={{ padding: 15, borderRadius: 10, background: THEME.surfaceAlt, border: `1px solid ${THEME.borderBright}`, display: "flex", gap: 12 }}>
               <div style={{ fontSize: 24 }}>🔬</div>
               <div>
-                <div style={{ fontSize: 10, color: THEME.textMuted, letterSpacing: "2px", fontWeight: 700, marginBottom: 4 }}>EXECUTIVE SUMMARY</div>
+                <div style={{ fontSize: 10, color: THEME.textMuted, letterSpacing: "2px", fontWeight: 700, marginBottom: 4 }}>EXECUTIVE SUMMARY · {logType} LOG{logFile ? ` · ${logFile.name}` : ""}</div>
                 <div style={{ fontSize: 13, lineHeight: 1.7 }}>{analysis.summary}</div>
               </div>
             </div>
@@ -549,9 +720,7 @@ export default function T24COBAnalyser() {
                       <div style={{ fontSize: 12, color: THEME.textSecondary, lineHeight: 1.5 }}>{a}</div>
                     </div>
                   ))}
-                  <button onClick={() => setActiveTab("chat")} style={{ width: "100%", padding: 9, background: "transparent", border: `1px dashed ${THEME.accent}55`, borderRadius: 8, color: THEME.accent, fontSize: 10, cursor: "pointer", letterSpacing: "1px", fontFamily: "'JetBrains Mono',monospace" }}>
-                    💬 ASK EXPERT ABOUT THESE →
-                  </button>
+                  <button onClick={() => setActiveTab("chat")} style={{ width: "100%", padding: 9, background: "transparent", border: `1px dashed ${THEME.accent}55`, borderRadius: 8, color: THEME.accent, fontSize: 10, cursor: "pointer", letterSpacing: "1px", fontFamily: "'JetBrains Mono',monospace" }}>💬 ASK EXPERT ABOUT THESE →</button>
                 </div>
               )}
             </div>
@@ -561,13 +730,21 @@ export default function T24COBAnalyser() {
         {/* ── CHAT TAB ── */}
         {activeTab === "chat" && (
           <div className="fade">
-            <div style={{ height: 400, overflowY: "auto", background: THEME.surfaceAlt, borderRadius: 10, border: `1px solid ${THEME.border}`, padding: 13, marginBottom: 11 }}>
+            {kbFiles.length > 0 && (
+              <div style={{ marginBottom: 12, padding: "8px 14px", borderRadius: 8, background: `${THEME.purple}0a`, border: `1px solid ${THEME.purple}33`, display: "flex", alignItems: "center", gap: 10 }}>
+                <span style={{ fontSize: 14 }}>📚</span>
+                <span style={{ fontSize: 10, color: THEME.purple }}>Knowledge base active — {kbFiles.length} document{kbFiles.length > 1 ? "s" : ""} ({kbFiles.map(f => f.name).join(", ")}) are informing responses</span>
+              </div>
+            )}
+            <div style={{ height: 390, overflowY: "auto", background: THEME.surfaceAlt, borderRadius: 10, border: `1px solid ${THEME.border}`, padding: 13, marginBottom: 11 }}>
               {chatMessages.length === 0 && (
                 <div style={{ padding: "28px 14px", textAlign: "center" }}>
                   <div style={{ fontSize: 26, marginBottom: 10 }}>🏦</div>
-                  <div style={{ fontSize: 12, color: THEME.textSecondary, marginBottom: 14 }}>Ask anything about T24 COB performance, AA Architecture, OFS tuning, indexes, or batch optimization.</div>
+                  <div style={{ fontSize: 12, color: THEME.textSecondary, marginBottom: 14 }}>
+                    {analysis ? `Analysis loaded — ask about your ${logType} log findings, fixes, or optimizations.` : "Ask anything about T24 COB performance, AA Architecture, OFS tuning, indexes, or batch optimization."}
+                  </div>
                   <div style={{ display: "flex", flexWrap: "wrap", gap: 7, justifyContent: "center" }}>
-                    {["How to fix IC.COB timeouts?", "Best F.ACCOUNT index strategy?", "Tune TSA.SERVICES agents", "AA EOD best practices", "Reduce OFS logging", "STANDARD.SELECTION tips"].map(q => (
+                    {["Give me fixes for my current logs", "Explain the critical issues found", "How to fix IC.COB timeouts?", "Best F.ACCOUNT index strategy?", "Tune TSA.SERVICES agents", "Reduce OFS logging overhead"].map(q => (
                       <button key={q} className="qbtn" onClick={() => setChatInput(q)} style={{ padding: "6px 10px", background: THEME.bg, border: `1px solid ${THEME.border}`, borderRadius: 6, color: THEME.textSecondary, fontSize: 10, cursor: "pointer", fontFamily: "'JetBrains Mono',monospace", transition: "all 0.2s" }}>{q}</button>
                     ))}
                   </div>
@@ -590,7 +767,7 @@ export default function T24COBAnalyser() {
             </div>
             <div style={{ display: "flex", gap: 10 }}>
               <input value={chatInput} onChange={e => setChatInput(e.target.value)} onKeyDown={e => e.key === "Enter" && sendChat()}
-                placeholder="Ask about T24 COB, AA, OFS, indexes, batch tuning..."
+                placeholder="Ask about your log analysis, T24 COB, AA, OFS, indexes..."
                 style={{ flex: 1, padding: "11px 13px", background: THEME.surfaceAlt, border: `1px solid ${THEME.border}`, borderRadius: 8, color: THEME.textPrimary, fontSize: 12, fontFamily: "'JetBrains Mono',monospace" }} />
               <button onClick={sendChat} disabled={chatLoading || !chatInput.trim()} style={{ padding: "11px 17px", background: chatLoading || !chatInput.trim() ? THEME.surfaceAlt : THEME.accent, border: `1px solid ${chatLoading || !chatInput.trim() ? THEME.border : THEME.accent}`, borderRadius: 8, color: chatLoading || !chatInput.trim() ? THEME.textMuted : "#000", fontSize: 11, fontWeight: 700, cursor: chatLoading || !chatInput.trim() ? "not-allowed" : "pointer", letterSpacing: "1px", fontFamily: "'JetBrains Mono',monospace" }}>SEND</button>
             </div>
@@ -598,7 +775,7 @@ export default function T24COBAnalyser() {
         )}
       </div>
 
-      {/* ── FOOTER ── */}
+      {/* FOOTER */}
       <div style={{ borderTop: `1px solid ${THEME.border}`, padding: "9px 24px", display: "flex", justifyContent: "space-between" }}>
         <div style={{ fontSize: 10, color: THEME.textMuted, letterSpacing: "1px" }}>POWERED BY CLAUDE AI · TEMENOS T24 · VEXORA AI</div>
         <div style={{ display: "flex", gap: 12, fontSize: 10, color: THEME.textMuted }}>
