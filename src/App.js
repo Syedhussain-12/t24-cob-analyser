@@ -8,10 +8,51 @@ const THEME = {
   textPrimary: "#f0f4fa", textSecondary: "#a0b0c8", textMuted: "#6a80a0",
 };
 
-const SYSTEM_PROMPT = `T24 COB expert. Output ONLY a raw JSON object. No markdown, no backticks, no prose before or after. Keep every string under 55 characters. Return exactly 2 issues, 2 optimizations, 2 cob_phases, 2 priority_actions.
+const SYSTEM_PROMPT = `You are a senior Temenos T24 Core Banking performance engineer. Analyze the provided log files and return ONLY a valid JSON object — no markdown, no backticks, no text before or after.
 
-Format:
-{"summary":"brief summary under 55 chars","duration_risk":"HIGH","issues":[{"category":"Database Index","severity":"HIGH","title":"short title","detail":"short detail","fix":"short fix"},{"category":"TSA Services","severity":"MEDIUM","title":"short title","detail":"short detail","fix":"short fix"}],"optimizations":[{"title":"short","action":"short action","expected_gain":"X% faster"},{"title":"short","action":"short action","expected_gain":"Y min saved"}],"cob_phases":[{"phase":"IC.COB","status":"CRITICAL","note":"timed out"},{"phase":"AA.EOD","status":"WARNING","note":"slow"}],"priority_actions":["action one","action two"]}`;
+Rules:
+- Identify ALL real issues found in the logs — do not limit to 2
+- Each issue must reference actual log entries, error codes, or timestamps found
+- Severity must reflect actual impact: CRITICAL=system failure/data loss risk, HIGH=major perf impact, MEDIUM=degraded perf, LOW=minor
+- duration_risk is overall COB health: CRITICAL/HIGH/MEDIUM/LOW based on actual findings
+- Fixes must be specific T24 actions with field names, commands, or config changes
+- If KB documents are provided, use them to give more accurate and specific fixes
+- Strings can be up to 120 characters
+- Return between 2-6 issues, 2-4 optimizations, 2-4 cob_phases, 3-5 priority_actions based on what is actually found
+
+JSON format:
+{
+  "summary": "Concise description of what was found in these specific logs",
+  "duration_risk": "CRITICAL|HIGH|MEDIUM|LOW",
+  "issues": [
+    {
+      "category": "Database Index|Batch Config|TSA Services|PGM File|OFS Logging|AA Architecture|WAS|JMS|IBM MQ|Runtime|Other",
+      "severity": "CRITICAL|HIGH|MEDIUM|LOW",
+      "title": "Specific issue title referencing actual log entry",
+      "detail": "What exactly was found in the log and why it is a problem",
+      "fix": "Specific T24 fix with field names, commands or configuration changes"
+    }
+  ],
+  "optimizations": [
+    {
+      "title": "Optimization title",
+      "action": "Specific T24 action with field names",
+      "expected_gain": "Estimated improvement e.g. 30% faster or 15min saved"
+    }
+  ],
+  "cob_phases": [
+    {
+      "phase": "Phase name from logs",
+      "status": "OK|WARNING|CRITICAL",
+      "note": "What was observed for this phase"
+    }
+  ],
+  "priority_actions": [
+    "Specific action 1 with T24 field or command reference",
+    "Specific action 2",
+    "Specific action 3"
+  ]
+}`;
 
 function safeParseJSON(text) {
   try { return JSON.parse(text); } catch {}
@@ -177,7 +218,7 @@ export default function T24COBAnalyser() {
         // For binary/PDF just grab readable ASCII text
         if (typeof content !== "string") content = "";
         // Limit per file to 2000 chars to stay within token budget
-        const trimmed = content.replace(/[^\x20-\x7E\n\r\t]/g, " ").replace(/\s+/g, " ").trim().slice(0, 2000);
+        const trimmed = content.replace(/[^\x20-\x7E\n\r\t]/g, " ").replace(/\s+/g, " ").trim().slice(0, 3000);
         setKbFiles(prev => [...prev, { name: file.name, content: trimmed, size: file.size }]);
       };
       reader.readAsText(file);
@@ -211,11 +252,11 @@ export default function T24COBAnalyser() {
     setLoading(true); setError(""); setAnalysis(null);
     try {
       // Combine all log files, label each by filename, total 1500 chars
-      const combined = logFiles.map(f => `=== ${f.name} (${f.type}) ===\n${f.content.slice(0, 600)}`).join("\n\n").slice(0, 1500);
+      const combined = logFiles.map(f => `=== ${f.name} (${f.type}) ===\n${f.content.slice(0, 1200)}`).join("\n\n").slice(0, 3500);
       const kbContext = buildKBContext();
       const data = await callAPI({
         model: "claude-haiku-4-5-20251001",
-        max_tokens: 1000,
+        max_tokens: 2000,
         system: SYSTEM_PROMPT + kbContext,
         messages: [{ role: "user", content: `Analyze these T24 log files:\n\n${combined}` }],
       });
