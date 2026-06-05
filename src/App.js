@@ -1,14 +1,12 @@
 import { useState, useRef, useEffect } from "react";
 
 const THEME = {
-  bg: "#0a0c10", surface: "#0f1318", surfaceAlt: "#141921",
-  border: "#1e2530", borderBright: "#2a3545",
-  accent: "#f0a500", green: "#00e5a0", red: "#ff4d6d",
-  blue: "#4da6ff", purple: "#b388ff",
-  textPrimary: "#e8edf3", textSecondary: "#7a8fa8", textMuted: "#4a5a6a",
+  bg: "#111620", surface: "#181e2a", surfaceAlt: "#1e2638",
+  border: "#2a3650", borderBright: "#3a4f70",
+  accent: "#f0a500", green: "#00d48a", red: "#ff4d6d",
+  blue: "#4da6ff", purple: "#c084fc",
+  textPrimary: "#f0f4fa", textSecondary: "#a0b0c8", textMuted: "#6a80a0",
 };
-
-const LOG_TYPES = ["WAS", "EDB.log", "MDB.log", "JMS", "IBM MQ", "DATABASE.log", "Runtime.log", "COB", "Other"];
 
 const SYSTEM_PROMPT = `T24 COB expert. Output ONLY a raw JSON object. No markdown, no backticks, no prose before or after. Keep every string under 55 characters. Return exactly 2 issues, 2 optimizations, 2 cob_phases, 2 priority_actions.
 
@@ -125,10 +123,8 @@ function PhaseTimeline({ phases }) {
 }
 
 export default function T24COBAnalyser() {
-  // Log file state
-  const [logFile, setLogFile] = useState(null);
-  const [logContent, setLogContent] = useState("");
-  const [logType, setLogType] = useState("COB");
+  // Log files state — multiple files
+  const [logFiles, setLogFiles] = useState([]); // [{name, content, size, type}]
   const [logError, setLogError] = useState("");
   const logInputRef = useRef(null);
 
@@ -151,21 +147,25 @@ export default function T24COBAnalyser() {
 
   useEffect(() => { chatEndRef.current?.scrollIntoView({ behavior: "smooth" }); }, [chatMessages]);
 
-  // ── Read uploaded log file ──
-  function handleLogFile(file) {
-    if (!file) return;
-    const allowed = [".log", ".txt", ".out", ".err", ".trace"];
-    const ext = file.name.toLowerCase();
-    if (!allowed.some(a => ext.endsWith(a)) && !ext.includes("log") && !ext.includes("txt")) {
-      setLogError("Please upload a .log, .txt, .out or .trace file");
-      return;
-    }
+  // ── Read multiple uploaded log files ──
+  function handleLogFiles(files) {
     setLogError("");
-    setLogFile(file);
-    const reader = new FileReader();
-    reader.onload = e => setLogContent(e.target.result);
-    reader.readAsText(file);
+    Array.from(files).forEach(file => {
+      if (logFiles.find(f => f.name === file.name)) return;
+      const reader = new FileReader();
+      reader.onload = e => {
+        const content = e.target.result || "";
+        // Detect log type from filename
+        const n = file.name.toLowerCase();
+        const type = n.includes("was") ? "WAS" : n.includes("edb") ? "EDB" : n.includes("mdb") ? "MDB"
+          : n.includes("jms") ? "JMS" : n.includes("mq") ? "IBM MQ" : n.includes("database") || n.includes("db") ? "DATABASE"
+          : n.includes("runtime") ? "Runtime" : "COB";
+        setLogFiles(prev => [...prev, { name: file.name, content, size: file.size, type }]);
+      };
+      reader.readAsText(file);
+    });
   }
+  function removeLogFile(name) { setLogFiles(prev => prev.filter(f => f.name !== name)); }
 
   // ── Read knowledge base files (PDF text extraction via FileReader, txt direct) ──
   function handleKBFiles(files) {
@@ -207,16 +207,17 @@ export default function T24COBAnalyser() {
 
   // ── Analyse logs ──
   async function analyzeLogs() {
-    if (!logContent.trim()) return;
+    if (logFiles.length === 0) return;
     setLoading(true); setError(""); setAnalysis(null);
     try {
-      const snippet = logContent.slice(0, 1500);
+      // Combine all log files, label each by filename, total 1500 chars
+      const combined = logFiles.map(f => `=== ${f.name} (${f.type}) ===\n${f.content.slice(0, 600)}`).join("\n\n").slice(0, 1500);
       const kbContext = buildKBContext();
       const data = await callAPI({
         model: "claude-haiku-4-5-20251001",
         max_tokens: 1000,
         system: SYSTEM_PROMPT + kbContext,
-        messages: [{ role: "user", content: `Log type: ${logType}\n\nAnalyze:\n${snippet}` }],
+        messages: [{ role: "user", content: `Analyze these T24 log files:\n\n${combined}` }],
       });
       const raw = data.content?.map(b => b.text || "").join("") || "";
       const parsed = safeParseJSON(raw);
@@ -235,7 +236,7 @@ export default function T24COBAnalyser() {
     const kbContext = buildKBContext();
     const analysisContext = analysis ? [
       "CURRENT SESSION ANALYSIS:",
-      `Log Type: ${logType} | File: ${logFile?.name || "sample"}`,
+      `Files: ${logFiles.map(f => f.name).join(", ") || "sample"}`,
       `Summary: ${analysis.summary}`,
       `Risk: ${analysis.duration_risk} | Score: ${computeScore(analysis)}/100`,
       "Issues:", ...(analysis.issues || []).map(i => `  [${i.severity}] ${i.title} — Fix: ${i.fix}`),
@@ -315,9 +316,9 @@ export default function T24COBAnalyser() {
         <div style={{ width: 38, height: 38, borderRadius: 8, background: `${THEME.accent}22`, border: `1px solid ${THEME.accent}55`, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 17 }}>⚡</div>
         <div>
           <div style={{ fontFamily: "'Syne',sans-serif", fontSize: 17, fontWeight: 800, letterSpacing: "-0.3px" }}>
-            T24 COB <span style={{ color: THEME.accent }}>PERFORMANCE</span> ANALYSER
+            T24 <span style={{ color: THEME.accent }}>OPERATIONAL AI TOOL</span> BANKALFALAH
           </div>
-          <div style={{ fontSize: 10, color: THEME.textMuted, letterSpacing: "2px", marginTop: 1 }}>TEMENOS CORE BANKING · EOD INTELLIGENCE</div>
+          <div style={{ fontSize: 10, color: THEME.textMuted, letterSpacing: "2px", marginTop: 1 }}>TEMENOS CORE BANKING · BANKALFALAH · EOD INTELLIGENCE</div>
         </div>
         <div style={{ marginLeft: "auto", display: "flex", alignItems: "center", gap: 10 }}>
           {kbFiles.length > 0 && (
@@ -350,116 +351,84 @@ export default function T24COBAnalyser() {
 
         {/* ── LOG INPUT TAB ── */}
         {activeTab === "input" && (
-          <div className="fade" style={{ display: "grid", gridTemplateColumns: "1fr 280px", gap: 18 }}>
-            <div>
-              <div style={{ display: "flex", gap: 10, marginBottom: 14, alignItems: "center" }}>
-                <div style={{ fontSize: 10, color: THEME.textMuted, letterSpacing: "2px", fontWeight: 700 }}>LOG TYPE:</div>
-                <select value={logType} onChange={e => setLogType(e.target.value)} style={{
-                  background: THEME.surfaceAlt, border: `1px solid ${THEME.border}`, borderRadius: 6,
-                  color: THEME.textPrimary, fontSize: 11, padding: "5px 10px", fontFamily: "'JetBrains Mono',monospace", cursor: "pointer"
-                }}>
-                  {LOG_TYPES.map(t => <option key={t} value={t}>{t}</option>)}
-                </select>
+          <div className="fade">
+            {/* Multi-file drop zone */}
+            <div className="dz"
+              onDragOver={e => e.preventDefault()}
+              onDrop={e => { e.preventDefault(); handleLogFiles(e.dataTransfer.files); }}
+              onClick={() => logInputRef.current?.click()}
+              style={{
+                border: `2px dashed ${logFiles.length > 0 ? THEME.green : THEME.border}`, borderRadius: 10,
+                padding: "28px 24px", textAlign: "center", cursor: "pointer",
+                background: logFiles.length > 0 ? `${THEME.green}06` : THEME.surfaceAlt,
+                transition: "all 0.2s", marginBottom: 14
+              }}>
+              <input ref={logInputRef} type="file" accept=".log,.txt,.out,.err,.trace" multiple style={{ display: "none" }}
+                onChange={e => handleLogFiles(e.target.files)} />
+              <div style={{ fontSize: 28, marginBottom: 8 }}>📂</div>
+              <div style={{ fontSize: 13, fontWeight: 700, color: THEME.textSecondary, marginBottom: 5 }}>
+                Drop all your log files here or click to browse
               </div>
-
-              {/* Drop zone */}
-              <div className="dz" onClick={() => logInputRef.current?.click()}
-                onDragOver={e => { e.preventDefault(); }}
-                onDrop={e => { e.preventDefault(); handleLogFile(e.dataTransfer.files[0]); }}
-                style={{
-                  border: `2px dashed ${logFile ? THEME.green : THEME.border}`, borderRadius: 10,
-                  padding: "32px 24px", textAlign: "center", cursor: "pointer",
-                  background: logFile ? `${THEME.green}08` : THEME.surfaceAlt,
-                  transition: "all 0.2s", marginBottom: 12
-                }}>
-                <input ref={logInputRef} type="file" accept=".log,.txt,.out,.err,.trace" style={{ display: "none" }}
-                  onChange={e => handleLogFile(e.target.files[0])} />
-                {logFile ? (
-                  <div>
-                    <div style={{ fontSize: 24, marginBottom: 8 }}>✅</div>
-                    <div style={{ fontSize: 13, fontWeight: 700, color: THEME.green }}>{logFile.name}</div>
-                    <div style={{ fontSize: 10, color: THEME.textMuted, marginTop: 4 }}>
-                      {(logFile.size / 1024).toFixed(1)} KB · {logContent.split("\n").length} LINES
-                    </div>
-                    <div style={{ fontSize: 10, color: THEME.textMuted, marginTop: 6 }}>Click to replace</div>
-                  </div>
-                ) : (
-                  <div>
-                    <div style={{ fontSize: 32, marginBottom: 10 }}>📂</div>
-                    <div style={{ fontSize: 13, fontWeight: 700, color: THEME.textSecondary, marginBottom: 6 }}>
-                      Drop your log file here or click to browse
-                    </div>
-                    <div style={{ fontSize: 10, color: THEME.textMuted, marginBottom: 10 }}>
-                      Supports: .log .txt .out .err .trace
-                    </div>
-                    <div style={{ display: "flex", gap: 6, justifyContent: "center", flexWrap: "wrap" }}>
-                      {["WAS", "EDB.log", "MDB.log", "JMS", "IBM MQ", "DATABASE.log", "Runtime.log"].map(t => (
-                        <span key={t} style={{ fontSize: 9, padding: "2px 7px", borderRadius: 4, background: THEME.bg, border: `1px solid ${THEME.border}`, color: THEME.textMuted }}>{t}</span>
-                      ))}
-                    </div>
-                  </div>
-                )}
+              <div style={{ fontSize: 10, color: THEME.textMuted, marginBottom: 10 }}>
+                Multiple files supported · .log .txt .out .err .trace
               </div>
-
-              {logFile && logContent && (
-                <div style={{ marginBottom: 12, padding: "10px 14px", borderRadius: 8, background: THEME.surfaceAlt, border: `1px solid ${THEME.border}` }}>
-                  <div style={{ fontSize: 10, color: THEME.textMuted, letterSpacing: "1px", marginBottom: 6, fontWeight: 700 }}>LOG PREVIEW (first 8 lines)</div>
-                  <div style={{ fontSize: 11, color: THEME.textSecondary, lineHeight: 1.8, whiteSpace: "pre-wrap" }}>
-                    {logContent.split("\n").slice(0, 8).join("\n")}
-                  </div>
-                </div>
-              )}
-
-              {(error || logError) && (
-                <div style={{ marginBottom: 10, padding: "10px 14px", borderRadius: 6, background: `${THEME.red}15`, border: `1px solid ${THEME.red}44`, color: THEME.red, fontSize: 12 }}>
-                  ⚠ {error || logError}
-                </div>
-              )}
-
-              <div style={{ display: "flex", gap: 10 }}>
-                <button className="abtn" onClick={analyzeLogs} disabled={loading || !logContent.trim()} style={{
-                  flex: 1, padding: "12px", background: loading || !logContent.trim() ? THEME.surfaceAlt : THEME.accent,
-                  border: `1px solid ${loading || !logContent.trim() ? THEME.border : THEME.accent}`, borderRadius: 8,
-                  color: loading || !logContent.trim() ? THEME.textMuted : "#000", fontSize: 11, fontWeight: 700,
-                  cursor: loading || !logContent.trim() ? "not-allowed" : "pointer", letterSpacing: "1.5px",
-                  transition: "all 0.2s", fontFamily: "'JetBrains Mono',monospace",
-                  display: "flex", alignItems: "center", justifyContent: "center", gap: 8
-                }}>
-                  {loading
-                    ? <><div className="spin" style={{ width: 13, height: 13, borderRadius: "50%", border: "2px solid #555", borderTopColor: THEME.accent }} />ANALYSING {logType} LOG...</>
-                    : `⚡ ANALYSE ${logType} LOG`}
-                </button>
-                {logFile && (
-                  <button onClick={() => { setLogFile(null); setLogContent(""); setAnalysis(null); setError(""); setLogError(""); }} style={{ padding: "12px 16px", background: "transparent", border: `1px solid ${THEME.border}`, borderRadius: 8, color: THEME.textMuted, fontSize: 11, cursor: "pointer", fontFamily: "'JetBrains Mono',monospace" }}>
-                    CLEAR
-                  </button>
-                )}
+              <div style={{ display: "flex", gap: 6, justifyContent: "center", flexWrap: "wrap" }}>
+                {["WAS", "EDB.log", "MDB.log", "JMS", "IBM MQ", "DATABASE.log", "Runtime.log", "COB"].map(t => (
+                  <span key={t} style={{ fontSize: 9, padding: "2px 7px", borderRadius: 4, background: THEME.bg, border: `1px solid ${THEME.border}`, color: THEME.textMuted }}>{t}</span>
+                ))}
               </div>
             </div>
 
-            {/* Right panel */}
-            <div>
-              <div style={{ fontSize: 10, color: THEME.textMuted, letterSpacing: "2px", marginBottom: 8, fontWeight: 700 }}>SUPPORTED LOG TYPES</div>
-              {[
-                { name: "WAS", desc: "WebSphere App Server logs" },
-                { name: "EDB.log", desc: "T24 EDB activity logs" },
-                { name: "MDB.log", desc: "Message-Driven Bean logs" },
-                { name: "JMS", desc: "Java Message Service logs" },
-                { name: "IBM MQ", desc: "MQ broker & queue logs" },
-                { name: "DATABASE.log", desc: "Oracle/SQL Server logs" },
-                { name: "Runtime.log", desc: "T24 runtime & JVM logs" },
-              ].map(({ name, desc }) => (
-                <div key={name} style={{ display: "flex", gap: 10, alignItems: "center", marginBottom: 8, padding: "8px 12px", borderRadius: 6, background: logType === name ? `${THEME.accent}12` : THEME.surfaceAlt, border: `1px solid ${logType === name ? THEME.accent + "44" : THEME.border}`, cursor: "pointer" }}
-                  onClick={() => setLogType(name)}>
-                  <span style={{ fontSize: 10, fontWeight: 700, color: logType === name ? THEME.accent : THEME.textMuted, minWidth: 72 }}>{name}</span>
-                  <span style={{ fontSize: 10, color: THEME.textMuted }}>{desc}</span>
+            {/* Uploaded log files list */}
+            {logFiles.length > 0 && (
+              <div style={{ marginBottom: 14 }}>
+                <div style={{ fontSize: 10, color: THEME.textMuted, letterSpacing: "2px", marginBottom: 8, fontWeight: 700 }}>
+                  UPLOADED LOG FILES — {logFiles.length} FILE{logFiles.length > 1 ? "S" : ""}
+                  {kbFiles.length > 0 && <span style={{ color: THEME.purple, marginLeft: 12 }}>· 📚 {kbFiles.length} KB FILE{kbFiles.length > 1 ? "S" : ""} ACTIVE</span>}
                 </div>
-              ))}
-              {kbFiles.length > 0 && (
-                <div style={{ marginTop: 12, padding: "10px 12px", borderRadius: 8, background: `${THEME.purple}0a`, border: `1px solid ${THEME.purple}33` }}>
-                  <div style={{ fontSize: 10, color: THEME.purple, fontWeight: 700, marginBottom: 4 }}>📚 KB ACTIVE</div>
-                  <div style={{ fontSize: 10, color: THEME.textMuted }}>{kbFiles.length} knowledge file{kbFiles.length > 1 ? "s" : ""} will enhance this analysis</div>
+                <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(280px, 1fr))", gap: 8 }}>
+                  {logFiles.map((f, i) => (
+                    <div key={i} style={{ padding: "10px 13px", borderRadius: 8, background: THEME.surfaceAlt, border: `1px solid ${THEME.green}33`, display: "flex", gap: 10, alignItems: "flex-start" }}>
+                      <div style={{ fontSize: 18, flexShrink: 0 }}>📄</div>
+                      <div style={{ flex: 1, minWidth: 0 }}>
+                        <div style={{ fontSize: 11, fontWeight: 700, color: THEME.green, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{f.name}</div>
+                        <div style={{ fontSize: 10, color: THEME.textMuted, marginTop: 2 }}>
+                          {(f.size / 1024).toFixed(1)} KB · {f.content.split("\n").length} lines · <span style={{ color: THEME.accent }}>{f.type}</span>
+                        </div>
+                        <div style={{ fontSize: 10, color: THEME.textSecondary, marginTop: 4, lineHeight: 1.5, whiteSpace: "pre-wrap", overflow: "hidden", maxHeight: 36 }}>
+                          {f.content.split("\n").slice(0, 2).join("\n")}
+                        </div>
+                      </div>
+                      <button onClick={() => removeLogFile(f.name)} style={{ padding: "3px 7px", background: `${THEME.red}15`, border: `1px solid ${THEME.red}33`, borderRadius: 4, color: THEME.red, fontSize: 10, cursor: "pointer", flexShrink: 0, fontFamily: "'JetBrains Mono',monospace" }}>✕</button>
+                    </div>
+                  ))}
                 </div>
+              </div>
+            )}
+
+            {(error || logError) && (
+              <div style={{ marginBottom: 10, padding: "10px 14px", borderRadius: 6, background: `${THEME.red}15`, border: `1px solid ${THEME.red}44`, color: THEME.red, fontSize: 12 }}>
+                ⚠ {error || logError}
+              </div>
+            )}
+
+            <div style={{ display: "flex", gap: 10 }}>
+              <button className="abtn" onClick={analyzeLogs} disabled={loading || logFiles.length === 0} style={{
+                flex: 1, padding: "13px", background: loading || logFiles.length === 0 ? THEME.surfaceAlt : THEME.accent,
+                border: `1px solid ${loading || logFiles.length === 0 ? THEME.border : THEME.accent}`, borderRadius: 8,
+                color: loading || logFiles.length === 0 ? THEME.textMuted : "#000", fontSize: 11, fontWeight: 700,
+                cursor: loading || logFiles.length === 0 ? "not-allowed" : "pointer", letterSpacing: "1.5px",
+                transition: "all 0.2s", fontFamily: "'JetBrains Mono',monospace",
+                display: "flex", alignItems: "center", justifyContent: "center", gap: 8
+              }}>
+                {loading
+                  ? <><div className="spin" style={{ width: 13, height: 13, borderRadius: "50%", border: "2px solid #555", borderTopColor: THEME.accent }} />ANALYSING {logFiles.length} LOG FILE{logFiles.length > 1 ? "S" : ""}...</>
+                  : `⚡ ANALYSE ${logFiles.length > 0 ? logFiles.length + " LOG FILE" + (logFiles.length > 1 ? "S" : "") : "LOGS"}`}
+              </button>
+              {logFiles.length > 0 && (
+                <button onClick={() => { setLogFiles([]); setAnalysis(null); setError(""); setLogError(""); }} style={{ padding: "13px 16px", background: "transparent", border: `1px solid ${THEME.border}`, borderRadius: 8, color: THEME.textMuted, fontSize: 11, cursor: "pointer", fontFamily: "'JetBrains Mono',monospace" }}>
+                  CLEAR ALL
+                </button>
               )}
             </div>
           </div>
@@ -651,7 +620,7 @@ export default function T24COBAnalyser() {
             <div style={{ padding: 15, borderRadius: 10, background: THEME.surfaceAlt, border: `1px solid ${THEME.borderBright}`, display: "flex", gap: 12 }}>
               <div style={{ fontSize: 24 }}>🔬</div>
               <div>
-                <div style={{ fontSize: 10, color: THEME.textMuted, letterSpacing: "2px", fontWeight: 700, marginBottom: 4 }}>EXECUTIVE SUMMARY · {logType} LOG{logFile ? ` · ${logFile.name}` : ""}</div>
+                <div style={{ fontSize: 10, color: THEME.textMuted, letterSpacing: "2px", fontWeight: 700, marginBottom: 4 }}>EXECUTIVE SUMMARY · {logFiles.length > 0 ? logFiles.map(f => f.name).join(", ") : "Sample Log"}</div>
                 <div style={{ fontSize: 13, lineHeight: 1.7 }}>{analysis.summary}</div>
               </div>
             </div>
@@ -741,7 +710,7 @@ export default function T24COBAnalyser() {
                 <div style={{ padding: "28px 14px", textAlign: "center" }}>
                   <div style={{ fontSize: 26, marginBottom: 10 }}>🏦</div>
                   <div style={{ fontSize: 12, color: THEME.textSecondary, marginBottom: 14 }}>
-                    {analysis ? `Analysis loaded — ask about your ${logType} log findings, fixes, or optimizations.` : "Ask anything about T24 COB performance, AA Architecture, OFS tuning, indexes, or batch optimization."}
+                    {analysis ? `Analysis loaded — ask about your log findings, fixes, or optimizations.` : "Ask anything about T24 COB performance, AA Architecture, OFS tuning, indexes, or batch optimization."}
                   </div>
                   <div style={{ display: "flex", flexWrap: "wrap", gap: 7, justifyContent: "center" }}>
                     {["Give me fixes for my current logs", "Explain the critical issues found", "How to fix IC.COB timeouts?", "Best F.ACCOUNT index strategy?", "Tune TSA.SERVICES agents", "Reduce OFS logging overhead"].map(q => (
@@ -777,7 +746,7 @@ export default function T24COBAnalyser() {
 
       {/* FOOTER */}
       <div style={{ borderTop: `1px solid ${THEME.border}`, padding: "9px 24px", display: "flex", justifyContent: "space-between" }}>
-        <div style={{ fontSize: 10, color: THEME.textMuted, letterSpacing: "1px" }}>POWERED BY CLAUDE AI · TEMENOS T24 · VEXORA AI</div>
+        <div style={{ fontSize: 10, color: THEME.textMuted, letterSpacing: "1px" }}>T24 OPERATIONAL AI TOOL · BANKALFALAH · POWERED BY CLAUDE AI</div>
         <div style={{ display: "flex", gap: 12, fontSize: 10, color: THEME.textMuted }}>
           {["T24 R22+", "TAFC/TAFJ", "AA ARCH", "OFS/BIAN"].map(t => <span key={t}>{t}</span>)}
         </div>
